@@ -12,12 +12,12 @@
         }
         #title {
             margin-bottom: 20px; /* Space between the title and the QR code */
-            font-size: 24px;
+            font-size: 48px;
             font-weight: bold;
         }
         #instructions {
             margin-top: 20px; /* Space between the title and the QR code */
-            font-size: 12px;
+            font-size: 24px;
             font-weight: bold;
         }
     </style>
@@ -30,15 +30,15 @@
         <div id="instructions">
           Instructions: To import your private key to another device, you can scan the QR code (most secure) or you can
           <a href="mailto:eric@joinkudos.com?subject=Your%20Secret%20Key&body=Your+secret+key+is+8de1aeda05395f441e848b0965451ffe74fdfde3363aa98d94d33751854a86515a10a8f0c7ed8f7c6a1fb8593882974984b5ea1dbd9772d6ae0f8a7db763eecf6dcd0411edf4e2f0">Email the private key to yourself (less secure)</a>
-          <div style="font-size:9px">Fine print: this is as secure as your email is.  Nuff Said!</div>
+          <div style="font-size:12px">Fine print: this is as secure as your email is.  Nuff Said!</div>
         </div>
     </div>
 
     <script>
         var qrcode = new QRCode(document.getElementById("qrcode"), {
           text: "8de1aeda05395f441e848b0965451ffe74fdfde3363aa98d94d33751854a86515a10a8f0c7ed8f7c6a1fb8593882974984b5ea1dbd9772d6ae0f8a7db763eecf6dcd0411edf4e2f0",
-          width: 300,
-          height: 300,
+          width: 500,
+          height: 500,
         });
     </script>
 </body>
