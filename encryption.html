@@ -293,13 +293,6 @@
     }
 
     async function decryptCreditCards() {
-      // ensure salt and secret key are present
-      var salt = document.getElementById("salt").value;
-      if (!salt) {
-        alert('No salt present');
-        return;
-      }
-
       const secretKeyBase64 = document.getElementById("secretKey").value;
       if (!secretKeyBase64) {
         alert('No secret key present');
@@ -488,7 +481,7 @@
 
     <p><h3>Decrypting</h3></p>
     <ol>
-      <li>Ensure salt & secret key are set</li>
+      <li>Ensure secret key are set</li>
       <li>Paste encryted card data into Encrypted Card Data field</li>
       <li>Decrypt Cards</li>
     </ol>
