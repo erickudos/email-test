@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <title>Credit Card Encryption</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 20px;
+    }
+
+    form {
+      display: flex;
+      flex-direction: column;
+      width: 400px;
+    }
+
+    input {
+      margin-bottom: 5px;
+      width: 400px;
+    }
+    .card {
+      display: flex;
+      flex-direction: row;
+      gap: 20px; /* Space between the input fields */
+      align-items: flex-start; /* Align fields at the start */
+      margin-bottom: 20px; /* Space between the cards */
+    }
+    .input-field {
+      flex: 1; /* Make the fields grow and shrink to fit */
+    }
+    .input-field .number{
+      width: 175px;
+    }
+    .input-field label {
+      display: block;
+      margin-bottom: 5px; /* Space between the label and input */
+    }
+    .input-field input {
+      width: 100%;
+      padding: 8px;
+      box-sizing: border-box; /* Include padding in width calculation */
+    }
+    textarea {
+      margin-top: 10px;
+      width: 800px;
+    }
+    label {
+      font-weight: bold;
+
+    }
+  </style>
+  <script>
+    const keyRing = {};
+    const cards = [];
+    const pbkdf2Iterations = 600000;
+
+
+    // --- Key Functions ---
+    async function generateSecretKey() {
+      return crypto.subtle.generateKey(
+        { name: "AES-GCM", length: 256 },
+        true,
+        ["encrypt", "decrypt"]
+      );
+    }
+
+    async function importKey(rawKey) {
+      return crypto.subtle.importKey(
+        'raw',
+        rawKey,
+        { name: 'AES-GCM' },
+        true,
+        ['encrypt', 'decrypt']
+      );
+    }
+
+    async function exportKey(key) {
+      return new Uint8Array(await crypto.subtle.exportKey('raw', key));
+    }
+
+    async function deriveKeyFromPassword(password, salt, iterations = 100000) {
+      const enc = new TextEncoder();
+      const keyMaterial = await crypto.subtle.importKey(
+        "raw",
+        enc.encode(password),
+        { name: "PBKDF2" },
+        false,
+        ["deriveBits", "deriveKey"]
+      );
+      return crypto.subtle.deriveKey(
+        {
+          name: "PBKDF2",
+          salt: enc.encode(salt),
+          iterations: iterations,
+          hash: "SHA-256"
+        },
+        keyMaterial,
+        { name: "AES-GCM", length: 256 },
+        false,
+        ["encrypt", "decrypt"]
+      );
+    }
+
+    // --- Encryption/Decryption Functions ---
+    async function encryptData(data, key) {
+      const enc = new TextEncoder();
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const encrypted = await crypto.subtle.encrypt(
+        { name: "AES-GCM", iv: iv },
+        key,
+        enc.encode(data)
+      );
+      return { iv, encrypted };
+    }
+
+    async function decryptData(encrypted, key, iv) {
+      const decrypted = await crypto.subtle.decrypt(
+        { name: "AES-GCM", iv: iv },
+        key,
+        encrypted
+      );
+      const dec = new TextDecoder();
+      return dec.decode(decrypted);
+    }
+
+    // --- Hashing Functions ---
+    async function hashWithSalt(cardNumber, salt) {
+        const enc = new TextEncoder();
+        const combinedInput = salt + cardNumber; // Combine the salt and the card number
+        const hashBuffer = await crypto.subtle.digest('SHA-256', enc.encode(combinedInput));
+        return encodeBase64(hashBuffer);
+    }
+
+    // --- Utility Functions ---
+    function concatenateIvAndEncrypted(iv, encrypted) {
+        const combined = new Uint8Array(iv.length + encrypted.byteLength);
+        combined.set(iv, 0); // Set the IV at the beginning
+        combined.set(new Uint8Array(encrypted), iv.length); // Set the encrypted data after the IV
+        return combined;
+    }
+
+    function encodeBase64(buffer) {
+        return btoa(String.fromCharCode(...new Uint8Array(buffer)));
+    }
+
+    function decodeBase64(base64) {
+        return new Uint8Array(atob(base64).split("").map(char => char.charCodeAt(0)));
+    }
+
+    function encodeHex(buffer) {
+        return Array.from(new Uint8Array(buffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    function decodeHex(hex) {
+        return new Uint8Array(hex.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
+    }
+
+    // --- UI Functions ---
+    async function createSecretKey() {
+      const secretKey = await generateSecretKey();
+      const rawSecretKey = await exportKey(secretKey);
+      document.getElementById("secretKey").value = encodeBase64(rawSecretKey);
+    }
+
+    async function createKeyRing() {
+      // ensure salt and secret key are present
+      var salt = document.getElementById("salt").value;
+      if (!salt) {
+        alert('No salt present');
+        return;
+      }
+
+      const secretKeyBase64 = document.getElementById("secretKey").value;
+      if (!secretKeyBase64) {
+        alert('No secret key present');
+        return;
+      }
+      // clear the keyring
+      Object.keys(keyRing).forEach(key => delete keyRing[key]);
+      keyRing.iterations = pbkdf2Iterations;
+
+      // load card data
+      cards.splice(0, cards.length);
+      for (let i = 0; i < 3; i++) {
+        const card = {}
+        card.number = document.getElementById(`card${i + 1}Number`).value;
+        card.expiration = document.getElementById(`card${i + 1}Expiration`).value;
+        card.cvv = document.getElementById(`card${i + 1}Cvv`).value;
+        if (card.number) {
+          cards.push(card);
+        }
+      }
+
+      if (cards.length === 0) {
+        alert('No credit card numbers present to create keyring');
+        return;
+      }
+
+      const rawSecretKey = decodeBase64(secretKeyBase64);
+      // step 1: generate a 256-bit AES-GCM secret key
+      const secretKey = await importKey(rawSecretKey);
+
+      // step 2: encrypt secret with each of the card numbers
+      for (let i = 0; i < cards.length; i++) {
+        const cardNumber = cards[i].number;
+        // Create the key for the keyring
+        const keyRingKey = await hashWithSalt(cardNumber, salt);
+        console.log('keyRingKey:', keyRingKey);
+        const key = await deriveKeyFromPassword(cardNumber, salt, pbkdf2Iterations);
+        const encryptedSecret = await encryptData(secretKeyBase64, key);
+        const cypherTextBundle = concatenateIvAndEncrypted(encryptedSecret.iv, encryptedSecret.encrypted);
+        const cypherTextBundleBase64 = encodeBase64(cypherTextBundle);
+        console.log('cypherTextBundle:', cypherTextBundleBase64);
+        keyRing[keyRingKey] = cypherTextBundleBase64;
+      }
+
+      if (Object.keys(keyRing).length <= 1) {
+        alert('No credit card numbers present to create keyring');
+        return;
+      }
+
+      // step 3: display the keyring
+      document.getElementById("keyRingDisplay").value = JSON.stringify(keyRing, null, 2);
+    }
+
+    async function encryptCreditCards() {
+      // ensure salt and secret key are present
+      var salt = document.getElementById("salt").value;
+      if (!salt) {
+        alert('No salt present');
+        return;
+      }
+
+      const secretKeyBase64 = document.getElementById("secretKey").value;
+      if (!secretKeyBase64) {
+        alert('No secret key present');
+        return;
+      }
+
+      // set cvv and expiration for each card
+      for (let i = 0; i < cards.length; i++) {
+        cards[i].expiration = document.getElementById(`card${i + 1}Expiration`).value;
+        cards[i].cvv = document.getElementById(`card${i + 1}Cvv`).value;
+      }
+
+      const rawSecretKey = decodeBase64(secretKeyBase64);
+      // step 1: generate a 256-bit AES-GCM secret key
+      const secretKey = await importKey(rawSecretKey);
+
+      // step 2: encrypt each of the card numbers
+      const cardsJsonText = JSON.stringify(cards);
+      const cardsJsonTextEncrypted = await encryptData(cardsJsonText, secretKey);
+      const cardsJsonTextCypherBundleBase64 = encodeBase64(concatenateIvAndEncrypted(cardsJsonTextEncrypted.iv, cardsJsonTextEncrypted.encrypted));
+
+      // step 3: display the encrypted card data
+      document.getElementById("encryptedCardsDisplay").value = cardsJsonTextCypherBundleBase64
+    }
+
+    function init() {
+      document.getElementById("salt").value = crypto.getRandomValues(new Uint8Array(16)).join('');
+    }
+
+    function generateCards() {
+      document.getElementById("card1Number").value = Math.floor(Math.random() * 10000000000000000);
+      document.getElementById("card2Number").value = Math.floor(Math.random() * 10000000000000000);
+      document.getElementById("card3Number").value = Math.floor(Math.random() * 10000000000000000);
+    }
+
+    function clearCardData() {
+      for (let i = 0; i < 3; i++) {
+        document.getElementById(`card${i + 1}Number`).value = '';
+        document.getElementById(`card${i + 1}Expiration`).value = '';
+        document.getElementById(`card${i + 1}Cvv`).value = '';
+      }
+    }
+
+    async function decryptCreditCards() {
+      // ensure salt and secret key are present
+      var salt = document.getElementById("salt").value;
+      if (!salt) {
+        alert('No salt present');
+        return;
+      }
+
+      const secretKeyBase64 = document.getElementById("secretKey").value;
+      if (!secretKeyBase64) {
+        alert('No secret key present');
+        return;
+      }
+
+      const rawSecretKey = decodeBase64(secretKeyBase64);
+      // step 1: generate a 256-bit AES-GCM secret key
+      const secretKey = await importKey(rawSecretKey);
+
+      // step 2: decrypt the card numbers
+      const cardsJsonTextCypherBundleBase64 = document.getElementById("encryptedCardsDisplay").value;
+      const cardsJsonTextCypherBundle = decodeBase64(cardsJsonTextCypherBundleBase64);
+      const iv = cardsJsonTextCypherBundle.slice(0, 12);
+      const encrypted = cardsJsonTextCypherBundle.slice(12);
+      const cardsJsonText = await decryptData(encrypted, secretKey, iv);
+      const cardsJson = JSON.parse(cardsJsonText);
+
+      // step 3: display the decrypted card data
+      for (let i = 0; i < cardsJson.length; i++) {
+        document.getElementById(`card${i + 1}Number`).value = cardsJson[i].number;
+        document.getElementById(`card${i + 1}Expiration`).value = cardsJson[i].expiration;
+        document.getElementById(`card${i + 1}Cvv`).value = cardsJson[i].cvv;
+      }
+    }
+
+  </script>
+</head>
+
+<body onload="init()">
+  <h1>Credit Card Encryption</h1>
+
+  <form>
+    <label for="salt">Salt:</label>
+    <input type="text" id="salt" name="salt"><br>
+
+    <label for="secretKey">Secret Key:</label>
+    <input type="text" id="secretKey" name="secretKey"><br>
+
+    <div class="card">
+      <div class="input-field">
+        <label for="card1Number">Number:</label>
+        <input type="text" id="card1Number" name="card1Number" class="number" placeholder="0000000000000000">
+      </div>
+      <div class="input-field">
+        <label for="card1Expiration">Exp:</label>
+        <input type="text" id="card1Expiration" name="card1Expiration" class="expiration" placeholder="MM/YYYY">
+      </div>
+      <div class="input-field">
+        <label for="card1Cvv">CVV:</label>
+        <input type="text" id="card1Cvv" name="card1Cvv" class="cvv" placeholder="999">
+      </div>
+    </div>
+    
+    <div class="card">
+      <div class="input-field">
+        <label for="card2Number">Number:</label>
+        <input type="text" id="card2Number" name="card2Number" class="number" placeholder="0000000000000000">
+      </div>
+      <div class="input-field">
+        <label for="card2Expiration">Exp:</label>
+        <input type="text" id="card2Expiration" name="card2Expiration" class="expiration" placeholder="MM/YYYY">
+      </div>
+      <div class="input-field">
+        <label for="card2Cvv">CVV:</label>
+        <input type="text" id="card2Cvv" name="card2Cvv" class="cvv" placeholder="999">
+      </div>
+    </div>
+    
+    <div class="card">
+      <div class="input-field">
+        <label for="card3Number">Number:</label>
+        <input type="text" id="card3Number" name="card3Number" class="number" placeholder="0000000000000000">
+      </div>
+      <div class="input-field">
+        <label for="card3Expiration">Exp:</label>
+        <input type="text" id="card3Expiration" name="card3Expiration" class="expiration" placeholder="MM/YYYY">
+      </div>
+      <div class="input-field">
+        <label for="card3Cvv">CVV:</label>
+        <input type="text" id="card3Cvv" name="card3Cvv" class="cvv" placeholder="999">
+      </div>
+    </div>
+    <br>
+
+    <input type="button" value="Create Secret Key" onclick="createSecretKey()">
+    <input type="button" value="Generate Credit Card Numbers" onclick="generateCards()">
+    <input type="button" value="Create KeyRing" onclick="createKeyRing()">
+    <input type="button" value="Encrypt Credit Cards" onclick="encryptCreditCards()">
+    <input type="button" value="Clear Card Data" onclick="clearCardData()">
+    <input type="button" value="Decrypt Encrypted Credit Cards" onclick="decryptCreditCards()">
+
+    KeyRing:
+    <textarea id="keyRingDisplay" rows="10" cols="300"></textarea>
+
+    Encrypted Card Data:
+    <textarea id="encryptedCardsDisplay" rows="4" cols="300"></textarea>
+  </form>
+</body>
+
+</html>
