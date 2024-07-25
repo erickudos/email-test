@@ -22,9 +22,9 @@
     .card {
       display: flex;
       flex-direction: row;
-      gap: 20px; /* Space between the input fields */
+      gap: 15px; /* Space between the input fields */
       align-items: flex-start; /* Align fields at the start */
-      margin-bottom: 20px; /* Space between the cards */
+      margin-bottom: 15px; /* Space between the cards */
     }
     .input-field {
       flex: 1; /* Make the fields grow and shrink to fit */
@@ -244,11 +244,11 @@
         cards[i].cvv = document.getElementById(`card${i + 1}Cvv`).value;
       }
 
+      // step 1: get the secret key
       const rawSecretKey = decodeBase64(secretKeyBase64);
-      // step 1: generate a 256-bit AES-GCM secret key
       const secretKey = await importKey(rawSecretKey);
 
-      // step 2: encrypt each of the card numbers
+      // step 2: the card numbers details
       const cardsJsonText = JSON.stringify(cards);
       const cardsJsonTextEncrypted = await encryptData(cardsJsonText, secretKey);
       const cardsJsonTextCypherBundleBase64 = encodeBase64(concatenateIvAndEncrypted(cardsJsonTextEncrypted.iv, cardsJsonTextEncrypted.encrypted));
@@ -289,12 +289,16 @@
         return;
       }
 
+      // step 1: get the secret key
       const rawSecretKey = decodeBase64(secretKeyBase64);
-      // step 1: generate a 256-bit AES-GCM secret key
       const secretKey = await importKey(rawSecretKey);
 
       // step 2: decrypt the card numbers
       const cardsJsonTextCypherBundleBase64 = document.getElementById("encryptedCardsDisplay").value;
+      if (!cardsJsonTextCypherBundleBase64) {
+        alert('No encrypted card data present');
+        return;
+      }
       const cardsJsonTextCypherBundle = decodeBase64(cardsJsonTextCypherBundleBase64);
       const iv = cardsJsonTextCypherBundle.slice(0, 12);
       const encrypted = cardsJsonTextCypherBundle.slice(12);
@@ -307,6 +311,71 @@
         document.getElementById(`card${i + 1}Expiration`).value = cardsJson[i].expiration;
         document.getElementById(`card${i + 1}Cvv`).value = cardsJson[i].cvv;
       }
+    }
+
+    async function recoverSecretKeyFromKeyRing() {
+      // before we start, lets make sure the secret key is empty
+      if (document.getElementById("secretKey").value) {
+        alert('Secret key is not empty.  Please clear it before proceeding to demosntrate key recovery');
+        return;
+      }
+      // we would get this salt from the server after user login
+      const salt = document.getElementById("salt").value;
+      if (!salt) {
+        alert('No salt present');
+        return;
+      }
+      // we would get this keyring from the server after user login
+      // ensure keyring text is present
+      const keyRingText = document.getElementById("keyRingDisplay").value;
+      if (!keyRingText) {
+        alert('No keyring present.  Please provide one.');
+        return;
+      }
+      
+      let keyRingInput = null;
+      try {
+        keyRingInput = JSON.parse(keyRingText);
+        if (!keyRingInput) {
+          alert('No keyring present');
+          return;
+        }
+      } catch (e) {
+        alert('Invalid keyring JSON');
+        return;
+      }
+
+      const userPromptedCardNumber = prompt('Enter your card number');
+      if (!userPromptedCardNumber) {
+        alert('Recovery cancelled');
+        return;
+      }
+
+      const keyRingKey = await hashWithSalt(userPromptedCardNumber, salt);
+      const cypherTextBundleBase64 = keyRingInput[keyRingKey];
+      if (!cypherTextBundleBase64) {
+        alert('Invalid card number; no keyring item found');
+        return;
+      }
+
+      let decrypted = null;
+      try {
+        const cypherTextBundle = decodeBase64(cypherTextBundleBase64);
+        const iv = cypherTextBundle.slice(0, 12);
+        const encrypted = cypherTextBundle.slice(12);
+        const key = await deriveKeyFromPassword(userPromptedCardNumber, salt, keyRingInput.iterations);
+        decrypted = await decryptData(encrypted, key, iv);
+      } catch (e) {
+        alert('Error decrypting keyring item');
+        return;
+      }
+      
+      document.getElementById("secretKey").value = decrypted;
+      // animate the secretKey field glowing green for 2 seconds
+      document.getElementById("secretKey").style.backgroundColor = 'lightgreen';
+      setTimeout(() => {
+        document.getElementById("secretKey").style.backgroundColor = '';
+      }, 2000);
     }
 
   </script>
@@ -374,6 +443,7 @@
     <input type="button" value="Encrypt Credit Cards" onclick="encryptCreditCards()">
     <input type="button" value="Clear Card Data" onclick="clearCardData()">
     <input type="button" value="Decrypt Encrypted Credit Cards" onclick="decryptCreditCards()">
+    <input type="button" value="Recover Secret Key From KeyRing" onclick="recoverSecretKeyFromKeyRing()">
 
     KeyRing:
     <textarea id="keyRingDisplay" rows="10" cols="300"></textarea>
