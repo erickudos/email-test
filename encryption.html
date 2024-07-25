@@ -41,6 +41,11 @@
       padding: 8px;
       box-sizing: border-box; /* Include padding in width calculation */
     }
+    .instructions {
+      float:right;
+      width: 400px;
+      font-size: small;;
+    }
     textarea {
       margin-top: 10px;
       width: 800px;
@@ -238,10 +243,22 @@
         return;
       }
 
-      // set cvv and expiration for each card
-      for (let i = 0; i < cards.length; i++) {
-        cards[i].expiration = document.getElementById(`card${i + 1}Expiration`).value;
-        cards[i].cvv = document.getElementById(`card${i + 1}Cvv`).value;
+      // build card array from form
+      cards.splice(0, cards.length);
+      for (let i = 0; i < 3; i++) {
+        const card = {}
+        card.number = document.getElementById(`card${i + 1}Number`).value;
+        card.expiration = document.getElementById(`card${i + 1}Expiration`).value;
+        card.cvv = document.getElementById(`card${i + 1}Cvv`).value;
+        if (card.number) {
+          cards.push(card);
+        }
+      }
+
+      // if no card numbers, then nothing to encrypt
+      if (cards.length === 0) {
+        alert('No credit card numbers present to encrypt');
+        return;
       }
 
       // step 1: get the secret key
@@ -384,7 +401,7 @@
 <body onload="init()">
   <h1>Credit Card Encryption</h1>
 
-  <form>
+  <form style="float:left">
     <label for="salt">Salt:</label>
     <input type="text" id="salt" name="salt"><br>
 
@@ -451,6 +468,41 @@
     Encrypted Card Data:
     <textarea id="encryptedCardsDisplay" rows="4" cols="300"></textarea>
   </form>
+  <!-- create a div that is to the right of the form -->
+  <div class="instructions">
+    <h2>Instructions</h2>
+    <p>Note: all this runs 100% on the browser.  No data is transmitted.</p>
+    <p><h3>Creating the user keyrring</h3></p>
+    <ol>
+      <li>Create secret key</li>
+      <li>Generate or enter card numbers</li>
+      <li>Create the key ring</li>
+    </ol>
+
+    <p><h3>Encrypting</h3></p>
+    <ol>
+      <li>Ensure a secret key is set</li>
+      <li>Generate or enter card numbers</li>
+      <li>Encrypt Cards</li>
+    </ol>
+
+    <p><h3>Decrypting</h3></p>
+    <ol>
+      <li>Ensure salt & secret key are set</li>
+      <li>Paste encryted card data into Encrypted Card Data field</li>
+      <li>Decrypt Cards</li>
+    </ol>
+
+    <p><h3>Secret Key Recovery</h3></p>
+    <ol>
+      <li>Ensure a keyring is created on this page</li>
+      <li>Open this page in a new browser window</li>
+      <li>Paste salt from this page to the new one (IRL this would be provided after auth by the server)</li>
+      <li>Paste the keyring from this page to the new one (IRL this would also be provided after auth by the server)</li>
+      <li>Click Recover Secret Key From KeyRing</li>
+      <li>Enter one of the card numbers that was used to create the keyring</li>
+    </ol>
+
 </body>
 
 </html>
