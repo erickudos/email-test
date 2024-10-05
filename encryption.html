@@ -24,10 +24,13 @@
       flex-direction: row;
       gap: 15px; /* Space between the input fields */
       align-items: flex-start; /* Align fields at the start */
-      margin-bottom: 15px; /* Space between the cards */
+      margin-bottom: 10px; /* Space between the cards */
     }
     .input-field {
       flex: 1; /* Make the fields grow and shrink to fit */
+    }
+    .input-field .id{
+      width: 50px;
     }
     .input-field .number{
       width: 175px;
@@ -38,7 +41,7 @@
     }
     .input-field input {
       width: 100%;
-      padding: 8px;
+      padding: 5px;
       box-sizing: border-box; /* Include padding in width calculation */
     }
     .instructions {
@@ -58,7 +61,8 @@
   <script>
     const keyRing = {};
     const cards = [];
-    const pbkdf2Iterations = 600000;
+    const pbkdf2Iterations = 700000;
+    const keyExchangeKeyPair = {};
 
 
     // --- Key Functions ---
@@ -111,11 +115,14 @@
     async function encryptData(data, key) {
       const enc = new TextEncoder();
       const iv = crypto.getRandomValues(new Uint8Array(12));
+      const t1 = performance.now();
       const encrypted = await crypto.subtle.encrypt(
         { name: "AES-GCM", iv: iv },
         key,
         enc.encode(data)
       );
+      const t2 = performance.now();
+      console.log('Encryption time:', t2 - t1);
       return { iv, encrypted };
     }
 
@@ -129,13 +136,133 @@
       return dec.decode(decrypted);
     }
 
+    async function encryptBinaryData(binaryData, key) {
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const encrypted = await crypto.subtle.encrypt(
+        { name: "AES-GCM", iv: iv },
+        key,
+        binaryData
+      );
+      return { iv, encrypted };
+    }
+
+    async function decryptBinaryData(encrypted, key, iv) {
+      const decrypted = await crypto.subtle.decrypt(
+        { name: "AES-GCM", iv: iv },
+        key,
+        encrypted
+      );
+      // Return the decrypted data as an ArrayBuffer
+      return decrypted;
+    }
+
     // --- Hashing Functions ---
-    async function hashWithSalt(cardNumber, salt) {
+    async function hashWithSalt(salt, cardNumber) {
         const enc = new TextEncoder();
         const combinedInput = salt + cardNumber; // Combine the salt and the card number
         const hashBuffer = await crypto.subtle.digest('SHA-256', enc.encode(combinedInput));
         return encodeBase64(hashBuffer);
     }
+
+    // --- Key Exchange Functions ---
+    async function generateKeyExchangeKeyPair() {
+      const keyPair = await crypto.subtle.generateKey(
+        {
+          name: "ECDH",             // The algorithm
+          namedCurve: "P-256"       // The curve name (P-256 is commonly used)
+        },
+        true,                         // Whether the key is extractable (can be exported)
+        ["deriveKey", "deriveBits"] // Usage of the key pair (key derivation)
+      );
+      console.log("Key Exchange Key Pair generated:", keyPair);
+
+      return keyPair;
+    }
+
+    async function generateKeyExchangeKeyPairAndShowPublicKey() {
+      const keyPair = await generateKeyExchangeKeyPair();
+      keyExchangeKeyPair.publicKey = keyPair.publicKey;
+      keyExchangeKeyPair.privateKey = keyPair.privateKey;
+      const publicKey = await crypto.subtle.exportKey('spki', keyPair.publicKey);
+      const publicKeyBase64 = encodeBase64(publicKey);
+
+      document.getElementById('modalText').value = publicKeyBase64;
+      document.getElementById('modalTitle').innerHTML = 'Copy Public Key';
+      document.getElementById('copyModal').style.display = 'block';
+    }
+
+    async function keyExchangeEncryptSecretKey(recipientPublicKeyBase64) {
+      // Step 1: Import the recipient's public key
+      const recipientPublicKey = await importPublicKey(recipientPublicKeyBase64);
+      const senderPrivateKey = keyExchangeKeyPair.privateKey;
+      
+      // Step 2: Derive a shared secret using the our key exchange private key and recipient's public key
+      const sharedSecret = await deriveSharedSecret(senderPrivateKey, recipientPublicKey);
+
+      // Step 3: Get our secret key & encode it as base64
+      const secretKeyBase64 = document.getElementById("secretKey").value;  // Payload
+      const secretKey = decodeBase64(secretKeyBase64);
+
+      // Step 4: Encrypt the BINARY secret key using AES-GCM and the shared secret
+      const encryptedSecretKey = await encryptBinaryData(secretKey, sharedSecret);
+
+      // Step 5: Concatenate the IV and the encrypted secret key
+      const cypherTextBundle = concatenateIvAndEncrypted(encryptedSecretKey.iv, encryptedSecretKey.encrypted);
+
+      // Step 6: Encode the cypher text bundle as base64
+      const cypherTextBundleBase64 = encodeBase64(cypherTextBundle);
+      return cypherTextBundleBase64;
+    }
+
+    async function keyExchangeDecryptSecretKey(senderPublicKeyBase64, encryptedSecretKeyBase64) {
+      // Step 1: Import the sender's public key
+      const senderPublicKey = await importPublicKey(senderPublicKeyBase64);
+
+      // Step 2: Derive the shared secret using recipient's private key and sender's public key
+      const sharedSecret = await deriveSharedSecret(keyExchangeKeyPair.privateKey, senderPublicKey);
+
+      // Step 3: Decode the base64-encoded encrypted secret key bundle
+      const encryptedSecretKeyBundle = decodeBase64(encryptedSecretKeyBase64);
+
+      // The first 12 bytes are the IV (for AES-GCM), rest is the encrypted secret key
+      const iv = encryptedSecretKeyBundle.slice(0, 12);
+      const encrypted = encryptedSecretKeyBundle.slice(12);
+
+      // Step 4: Decrypt the BINARY encrypted secret key using the shared secret and IV
+      const decryptedSecretKey = await decryptBinaryData(encrypted, sharedSecret, iv);
+
+      // Step 5: Convert the decrypted secret key back to Base64
+      const secretKeyBase64 = encodeBase64(decryptedSecretKey);
+      return secretKeyBase64;
+    }
+
+    async function importPublicKey(base64Key) {
+      const binaryKey = Uint8Array.from(atob(base64Key), c => c.charCodeAt(0));
+      return crypto.subtle.importKey(
+        "spki",
+      binaryKey.buffer,
+        {
+          name: "ECDH",
+          namedCurve: "P-256"
+        },
+        true,   // extractable
+        []      // key usages should be empty for ECDH public keys
+      );
+    }
+
+    async function deriveSharedSecret(privateKey, publicKey) {
+      return crypto.subtle.deriveKey(
+        {
+          name: "ECDH",
+        public: publicKey
+      },
+      privateKey,
+      { name: "AES-GCM", length: 256 }, // Derive a key for AES-GCM encryption
+      true, // Extractable
+        ["encrypt", "decrypt"] // Key usages
+      );
+    }
+
 
     // --- Utility Functions ---
     function concatenateIvAndEncrypted(iv, encrypted) {
@@ -150,7 +277,7 @@
     }
 
     function decodeBase64(base64) {
-        return new Uint8Array(atob(base64).split("").map(char => char.charCodeAt(0)));
+      return Uint8Array.from(atob(base64), c => c.charCodeAt(0));
     }
 
     function encodeHex(buffer) {
@@ -189,6 +316,7 @@
       cards.splice(0, cards.length);
       for (let i = 0; i < 3; i++) {
         const card = {}
+        card.id = document.getElementById(`card${i + 1}Id`).value;
         card.number = document.getElementById(`card${i + 1}Number`).value;
         card.expiration = document.getElementById(`card${i + 1}Expiration`).value;
         card.cvv = document.getElementById(`card${i + 1}Cvv`).value;
@@ -209,10 +337,14 @@
       // step 2: encrypt secret with each of the card numbers
       for (let i = 0; i < cards.length; i++) {
         const cardNumber = cards[i].number;
+        const cardId = cards[i].id;
         // Create the key for the keyring
-        const keyRingKey = await hashWithSalt(cardNumber, salt);
+        const keyRingKey = await hashWithSalt(salt, cardId);
         console.log('keyRingKey:', keyRingKey);
+        const t1 = performance.now();
         const key = await deriveKeyFromPassword(cardNumber, salt, pbkdf2Iterations);
+        const t2 = performance.now();
+        console.log('Key derivation time:', t2 - t1);
         const encryptedSecret = await encryptData(secretKeyBase64, key);
         const cypherTextBundle = concatenateIvAndEncrypted(encryptedSecret.iv, encryptedSecret.encrypted);
         const cypherTextBundleBase64 = encodeBase64(cypherTextBundle);
@@ -279,9 +411,18 @@
     }
 
     function generateCards() {
+      document.getElementById("card1Id").value = Math.floor(Math.random() * 10000); 
       document.getElementById("card1Number").value = Math.floor(Math.random() * 10000000000000000);
+      document.getElementById("card2Id").value = Math.floor(Math.random() * 10000);
       document.getElementById("card2Number").value = Math.floor(Math.random() * 10000000000000000);
+      document.getElementById("card3Id").value = Math.floor(Math.random() * 10000);
       document.getElementById("card3Number").value = Math.floor(Math.random() * 10000000000000000);
+      document.getElementById("card1Expiration").value = "01/2029";
+      document.getElementById("card2Expiration").value = "02/2029";
+      document.getElementById("card3Expiration").value = "03/2029";
+      document.getElementById("card1Cvv").value = Math.floor(Math.random() * 1000);
+      document.getElementById("card2Cvv").value = Math.floor(Math.random() * 1000);
+      document.getElementById("card3Cvv").value = Math.floor(Math.random() * 1000);
     }
 
     function clearCardData() {
@@ -361,7 +502,7 @@
         return;
       }
 
-      const keyRingKey = await hashWithSalt(userPromptedCardNumber, salt);
+      const keyRingKey = await hashWithSalt(salt, userPromptedCardNumber);
       const cypherTextBundleBase64 = keyRingInput[keyRingKey];
       if (!cypherTextBundleBase64) {
         alert('Invalid card number; no keyring item found');
@@ -388,11 +529,81 @@
       }, 2000);
     }
 
+    async function copyText() {
+      const textarea = document.getElementById('modalText');
+      textarea.select();
+      document.execCommand('copy');
+    }
+
+    async function closeModal() {
+      document.getElementById('copyModal').style.display = 'none';
+    }
+
+    async function keyExchangeOut() {
+      if (!keyExchangeKeyPair.publicKey) {
+        alert('No key exchange key pair present, generate one first');
+        return;
+      }
+
+      const publicKeyBase64 = prompt('Enter the recipient\'s base64 encoded public key');
+      if (!publicKeyBase64) {
+        alert('No public key present');
+        return;
+      }
+      const encryptedSecretKeyBase64 = await keyExchangeEncryptSecretKey(publicKeyBase64);
+      
+       // Show modal with the encrypted key
+      document.getElementById('modalText').value = encryptedSecretKeyBase64;
+      document.getElementById('modalTitle').innerHTML = 'Encrypted Secret Key';
+      document.getElementById('copyModal').style.display = 'block';
+    }
+
+    async function keyExchangeIn() {
+      if (!keyExchangeKeyPair.privateKey) {
+        alert('No key exchange key pair present, generate one first');
+        return;
+      }
+
+      const senderPublicKeyBase64 = prompt('Enter the sender\'s base64 encoded public key');
+      if (!senderPublicKeyBase64) {
+        alert('No sender\'s public key present');
+        return;
+      }
+
+      const encryptedSecretKeyBase64 = prompt('Enter the encrypted secret key');
+      if (!encryptedSecretKeyBase64) {
+        alert('No encrypted secret key present');
+        return;
+      }
+
+      const secretKeyBase64 = await keyExchangeDecryptSecretKey(senderPublicKeyBase64, encryptedSecretKeyBase64);
+
+      // Output the secret key in base64 and set it in the input field
+      console.log('Secret Key Base64:\'' + secretKeyBase64 + '\'');
+      console.log('Secret Key Base64 Length:', secretKeyBase64.length);
+      document.getElementById("secretKey").value = secretKeyBase64;
+
+      // animate the secretKey field glowing green for 2 seconds
+      document.getElementById("secretKey").style.backgroundColor = 'lightgreen';
+      setTimeout(() => {
+        document.getElementById("secretKey").style.backgroundColor = '';
+      }, 2000);
+    }
+
   </script>
 </head>
 
 <body onload="init()">
   <h1>Credit Card Encryption</h1>
+
+  <!-- Modal Structure -->
+<div id="copyModal" style="display:none; position:fixed; top:50%; left:50%; transform:translate(-50%, -50%); padding:20px; background-color:black; color: greenyellow; border:1px solid black; z-index:1000;">
+  <p id="modalTitle"></p>
+  <textarea id="modalText" rows="4" cols="50" readonly></textarea>
+  <br>
+  <button onclick="copyText()">Copy to Clipboard</button>
+  <button onclick="closeModal()">Close</button>
+</div>
 
   <form style="float:left">
     <label for="salt">Salt:</label>
@@ -402,6 +613,10 @@
     <input type="text" id="secretKey" name="secretKey"><br>
 
     <div class="card">
+      <div class="input-field">
+        <label for="card1Id">Id:</label>
+        <input type="text" id="card1Id" name="card1Id" class="id" placeholder="9999">
+      </div>
       <div class="input-field">
         <label for="card1Number">Number:</label>
         <input type="text" id="card1Number" name="card1Number" class="number" placeholder="0000000000000000">
@@ -418,6 +633,10 @@
     
     <div class="card">
       <div class="input-field">
+        <label for="card2Id">Id:</label>
+        <input type="text" id="card2Id" name="card2Id" class="id" placeholder="9999">
+      </div>
+      <div class="input-field">
         <label for="card2Number">Number:</label>
         <input type="text" id="card2Number" name="card2Number" class="number" placeholder="0000000000000000">
       </div>
@@ -432,6 +651,10 @@
     </div>
     
     <div class="card">
+      <div class="input-field">
+        <label for="card3Id">Id:</label>
+        <input type="text" id="card3Id" name="card3Id" class="id" placeholder="9999">
+      </div>
       <div class="input-field">
         <label for="card3Number">Number:</label>
         <input type="text" id="card3Number" name="card3Number" class="number" placeholder="0000000000000000">
@@ -454,6 +677,9 @@
     <input type="button" value="Clear Card Data" onclick="clearCardData()">
     <input type="button" value="Decrypt Encrypted Credit Cards" onclick="decryptCreditCards()">
     <input type="button" value="Recover Secret Key From KeyRing" onclick="recoverSecretKeyFromKeyRing()">
+    <input type="button" value="Generate Key Exchange Key Pair" onclick="generateKeyExchangeKeyPairAndShowPublicKey()">
+    <input type="button" value="Key Exchange Out" onclick="keyExchangeOut()">
+    <input type="button" value="Key Exchange In" onclick="keyExchangeIn()">
 
     KeyRing:
     <textarea id="keyRingDisplay" rows="10" cols="300"></textarea>
